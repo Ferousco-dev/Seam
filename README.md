@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ferousco-dev/Seam/releases/download/v1.1.0/SEAM-macOS-arm64.dmg"><img src="assets/download-macos.svg" alt="Download for macOS • Includes Android Agent" height="58"></a>
-  &nbsp;&nbsp;
-  <a href="https://github.com/Ferousco-dev/Seam/releases/latest"><img src="assets/download-linux.svg" alt="Download for Linux • Includes Android Agent" height="58"></a>
-  &nbsp;&nbsp;
-  <img src="assets/windows-soon.svg" alt="Coming soon for Windows" height="58">
+  <a href="https://github.com/Ferousco-dev/Seam/releases/download/v1.1.0/SEAM-macOS-arm64.dmg"><img src="assets/download-macos.svg" alt="Download for macOS • Includes Android Agent" height="46"></a>
+  &nbsp;
+  <a href="https://github.com/Ferousco-dev/Seam/releases/latest"><img src="assets/download-linux.svg" alt="Download for Linux • Includes Android Agent" height="46"></a>
+  &nbsp;
+  <img src="assets/windows-soon.svg" alt="Coming soon for Windows" height="46">
 </p>
 
 <p align="center">
