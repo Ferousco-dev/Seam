@@ -155,12 +155,12 @@ impl X11Grabber {
                             2 => self.held_buttons |= 0x04, // Middle
                             3 => self.held_buttons |= 0x02, // Right (Android Back)
                             4 => {
-                                // Vertical wheel UP
+                                // Vertical wheel UP (Android SmoothScrollInjector uses 32 units/notch; 16 = half notch, matching macOS)
                                 frames.push(OutboundFrame::MouseReport {
                                     buttons: self.held_buttons,
                                     dx: 0,
                                     dy: 0,
-                                    v_wheel: 1,
+                                    v_wheel: 16,
                                     h_wheel: 0,
                                 });
                                 continue;
@@ -171,7 +171,7 @@ impl X11Grabber {
                                     buttons: self.held_buttons,
                                     dx: 0,
                                     dy: 0,
-                                    v_wheel: -1,
+                                    v_wheel: -16,
                                     h_wheel: 0,
                                 });
                                 continue;
@@ -183,7 +183,7 @@ impl X11Grabber {
                                     dx: 0,
                                     dy: 0,
                                     v_wheel: 0,
-                                    h_wheel: -1,
+                                    h_wheel: -16,
                                 });
                                 continue;
                             }
@@ -194,7 +194,7 @@ impl X11Grabber {
                                     dx: 0,
                                     dy: 0,
                                     v_wheel: 0,
-                                    h_wheel: 1,
+                                    h_wheel: 16,
                                 });
                                 continue;
                             }

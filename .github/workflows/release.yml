@@ -1,0 +1,89 @@
+name: Linux Release & CI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach Linux packages to (e.g. v1.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build, Test & Package Linux (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux X11, GTK 3 & packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev \
+            libxfixes-dev \
+            libgtk-3-dev \
+            pkg-config \
+            dpkg-dev
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            linux-host/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('linux-host/Cargo.lock', 'linux-host/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Android DEX agent (dist/seam-agent.jar)
+        run: ./scripts/build-agent.sh
+
+      - name: Run Rust test suite
+        working-directory: linux-host
+        run: cargo test --locked || cargo test
+
+      - name: Package Linux .tar.gz and .deb
+        id: package
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          TAG="${EVENT_TAG:-$INPUT_TAG}"
+          if [[ -z "$TAG" ]]; then
+            echo "ERROR: Could not determine release tag." >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          ./scripts/package-linux.sh "$VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Linux release artifacts to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.package.outputs.tag }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          gh release upload "$TAG" \
+            "build/release/seam-${VERSION}-linux-x86_64.tar.gz" \
+            "build/release/seam_${VERSION}_amd64.deb" \
+            "build/release/SHA256SUMS" \
+            --clobber

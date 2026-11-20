@@ -7,6 +7,19 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -z "${ANDROID_SDK_ROOT:-}" ]]; then
+    for candidate in \
+        "${ANDROID_HOME:-}" \
+        "$HOME/Library/Android/sdk" \
+        "$HOME/Android/Sdk" \
+        "/usr/local/lib/android/sdk"; do
+        if [[ -n "$candidate" && -d "$candidate/platforms" ]]; then
+            ANDROID_SDK_ROOT="$candidate"
+            break
+        fi
+    done
+fi
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
 
 # Locate Android platform jar (prefer API 35 / Android 15)
