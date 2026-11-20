@@ -1,0 +1,10 @@
+pub mod bootstrap;
+pub mod cli;
+pub mod clipboard;
+pub mod config;
+pub mod core;
+pub mod diagnostics;
+pub mod input;
+pub mod protocol;
+pub mod transport;
+pub mod ui;

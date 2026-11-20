@@ -1,0 +1,31 @@
+[package]
+name = "seam-linux-host"
+version = "0.1.0"
+edition = "2021"
+authors = ["SEAM Contributors"]
+description = "Native Linux Host for SEAM Universal Control (Linux Mint Cinnamon X11)"
+license = "MIT"
+rust-version = "1.75"
+
+[lib]
+name = "seam_linux_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "seam"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2.191"
+hmac = "0.12"
+sha2 = "0.10"
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

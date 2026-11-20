@@ -23,3 +23,6 @@ local.properties
 # Logs & Scratch
 *.log
 tmp/
+
+# Rust build artifacts
+linux-host/target/
