@@ -1,0 +1,759 @@
+name: Windows build
+
+# Builds, tests and packages SEAM for Windows x64. Produces two artifacts from ONE app
+# folder (build\app):
+#
+#   SEAM-Windows-x64.zip   portable build (unzip and run)
+#   SEAM-Setup-x64.exe     installer (Program Files, Start Menu, Installed-apps entry)
+#
+# Primary trigger is manual (workflow_dispatch): nothing is built or published unless the
+# maintainer asks for it. Pull requests into main are also built, so the merge result is
+# verified before it lands.
+#
+# This workflow never creates a Release and never uploads anywhere but the run's artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: "How long the artifacts are kept (days)."
+        type: string
+        default: "30"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  PROJECT: windows-host/Seam.WindowsHost.csproj
+  APP_DIR: build\app
+
+jobs:
+  build:
+    name: Compile, self-test, package, install
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Show toolchain (diagnostics)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet --info
+          Write-Host "`n--- Java (needed only to rebuild the Android agent) ---"
+          if ($env:JAVA_HOME_17_X64) {
+            $env:JAVA_HOME = $env:JAVA_HOME_17_X64
+            $env:PATH = "$($env:JAVA_HOME)\bin;$env:PATH"
+            Write-Host "JAVA_HOME=$env:JAVA_HOME"
+          }
+          try { java -version } catch { Write-Host "java not on PATH" }
+          Write-Host "ANDROID_HOME=$env:ANDROID_HOME"
+          if (Test-Path "$env:ANDROID_HOME\platform-tools\adb.exe") {
+            & "$env:ANDROID_HOME\platform-tools\adb.exe" version
+          }
+          Write-Host "`n--- Inno Setup (installer compiler) ---"
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if ($iscc) { Write-Host "iscc: $($iscc.Source)" } else { Write-Host "iscc NOT on PATH" }
+
+      # ---------------------------------------------------------------- compile gate
+      # Nothing below is a substitute for this step. If the C# does not compile, the
+      # workflow fails here and no artifact is produced.
+      - name: Restore
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A malformed .csproj makes restore fail with an unrelated-looking error. XML comments
+          # cannot contain "--", which is an easy way to break this file; check it explicitly.
+          try { [void][xml](Get-Content $env:PROJECT -Raw) }
+          catch { throw "$env:PROJECT is not well-formed XML: $($_.Exception.Message)" }
+          # Capture the output so a failure is reported as an annotation with the real reason:
+          # reading the job log is not always possible, an annotation always is.
+          $output = (dotnet restore $env:PROJECT 2>&1 | Out-String)
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0) {
+            $reason = (($output -split "`n") | Where-Object { $_ -match ': error ' } | Select-Object -First 4) -join ' | '
+            Write-Host "::error title=dotnet restore::$reason"
+            throw "dotnet restore failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Build (Release)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = (dotnet build $env:PROJECT -c Release --no-restore -v normal 2>&1 | Out-String)
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0) {
+            $reason = (($output -split "`n") | Where-Object { $_ -match ': error ' } | Select-Object -First 6) -join ' | '
+            Write-Host "::error title=dotnet build::$reason"
+            throw "dotnet build failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Locate built executable
+        id: exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem -Path windows-host\bin\Release -Recurse -Filter seam-host.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "seam-host.exe not found under windows-host\bin\Release" }
+          Write-Host "built executable: $($exe.FullName)"
+          "path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Self-test (compiled Release binary)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $PWD '.github\scripts\Invoke-SeamCommand.ps1')
+          $exe = '${{ steps.exe.outputs.path }}'
+          Write-Host "running: $exe --self-test"
+          # Redirect to files, never through a PowerShell pipeline: this binary starts the adb
+          # daemon, and a pipeline would wait for a pipe that a daemon may still hold.
+          $result = Invoke-SeamCommand -Path $exe -ArgumentList '--self-test' -TimeoutSeconds 180
+          $code = $result.ExitCode
+          $output = $result.StdOut + "`n" + $result.StdErr
+          Write-Host $output
+          Write-Host "self-test exit code: $code"
+          if ($code -ne 0) {
+            $failed = (($output -split "`n") | Where-Object { $_ -match '\[FAIL\]' } | Select-Object -First 6) -join ' | '
+            Write-Host "::error title=self-test::$failed"
+            throw "self-test FAILED (exit $code)"
+          }
+
+      # ---------------------------------------------------------------- runtime assets
+      - name: Build Android agent (seam-agent.jar) from source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $sdk = $env:ANDROID_HOME; if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }
+          if (-not $sdk) { throw "ANDROID_HOME / ANDROID_SDK_ROOT is not set on this runner" }
+
+          $androidJar = Join-Path $sdk 'platforms\android-35\android.jar'
+          if (-not (Test-Path $androidJar)) {
+            $androidJar = Get-ChildItem (Join-Path $sdk 'platforms') -Recurse -Filter android.jar |
+                          Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+          }
+          if (-not $androidJar -or -not (Test-Path $androidJar)) { throw "android.jar not found under $sdk\platforms" }
+
+          $d8 = Join-Path $sdk 'build-tools\35.0.0\d8.bat'
+          if (-not (Test-Path $d8)) {
+            $d8 = Get-ChildItem (Join-Path $sdk 'build-tools') -Recurse -Filter d8.bat |
+                  Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+          }
+          if (-not $d8 -or -not (Test-Path $d8)) { throw "d8.bat not found under $sdk\build-tools" }
+
+          if ($env:JAVA_HOME_17_X64) {
+            $env:JAVA_HOME = $env:JAVA_HOME_17_X64
+            $env:PATH = "$($env:JAVA_HOME)\bin;$env:PATH"
+          }
+
+          New-Item -ItemType Directory -Force -Path build\agent-classes, dist | Out-Null
+          Remove-Item -Recurse -Force build\agent-classes\* -ErrorAction SilentlyContinue
+          Remove-Item -Force dist\seam-agent.jar -ErrorAction SilentlyContinue
+
+          Write-Host "android.jar = $androidJar"
+          Write-Host "d8          = $d8"
+
+          $sources = Get-ChildItem -Path android-agent\src\main\java -Recurse -Filter *.java |
+                     ForEach-Object { $_.FullName }
+          Write-Host "javac: $($sources.Count) source files"
+          & javac --release 17 -Xlint:all,-serial -cp $androidJar -d build\agent-classes @sources
+          if ($LASTEXITCODE -ne 0) { throw "javac failed with exit code $LASTEXITCODE" }
+
+          $classes = Get-ChildItem -Path build\agent-classes -Recurse -Filter *.class |
+                     ForEach-Object { $_.FullName }
+          & $d8 --min-api 30 --lib $androidJar --output dist\seam-agent.jar @classes
+          if ($LASTEXITCODE -ne 0) { throw "d8 failed with exit code $LASTEXITCODE" }
+
+          $jar = Get-Item dist\seam-agent.jar
+          $hash = (Get-FileHash $jar.FullName -Algorithm SHA256).Hash
+          Write-Host ("seam-agent.jar {0:N0} bytes  sha256={1}" -f $jar.Length, $hash)
+          if ($jar.Length -lt 4096) { throw "seam-agent.jar looks implausibly small" }
+
+      # ---------------------------------------------------------------- publish
+      # Folder-based, NOT single-file. A single-file build SelfExtracts to
+      # %TEMP%\.net\seam-host\<id>\ and runs from there; the prototype resolved its
+      # resources against AppContext.BaseDirectory, which is why the first real-device
+      # test reported "adb not found" and "expected in %TEMP%". Publishing a normal folder
+      # keeps seam-host.exe, seam-agent.jar and platform-tools\ together - no extraction,
+      # no temp lifecycle, nothing to clean up.
+      - name: Publish self-contained folder (win-x64)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -Recurse -Force $env:APP_DIR -ErrorAction SilentlyContinue
+          dotnet publish $env:PROJECT -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=false `
+            -p:DebugType=none -p:GenerateDocumentationFile=false `
+            -o $env:APP_DIR
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
+
+          Remove-Item "$env:APP_DIR\*.pdb" -ErrorAction SilentlyContinue
+
+          foreach ($required in 'seam-host.exe','seam-host.dll','hostfxr.dll','hostpolicy.dll','coreclr.dll') {
+            if (-not (Test-Path (Join-Path $env:APP_DIR $required))) {
+              throw "$required missing after publish - the app folder must be self-contained"
+            }
+          }
+          Write-Host "publish output ($((Get-ChildItem $env:APP_DIR -File).Count) files):"
+          Get-ChildItem $env:APP_DIR | Sort-Object Name | Format-Table Name, Length -AutoSize
+
+      # ---------------------------------------------------------------- app layout
+      # ONE folder is the source of truth for both artifacts. The ZIP and the installer are
+      # both built from build\app, so they cannot drift.
+      - name: Assemble the app folder (exe + agent + platform-tools + docs)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:APP_DIR
+
+          Copy-Item dist\seam-agent.jar $app
+
+          # Android Platform-Tools are part of the product now: a user must never have to
+          # touch PATH or download anything for SEAM to find adb.exe.
+          $pt = Join-Path $env:ANDROID_HOME 'platform-tools'
+          if (-not (Test-Path (Join-Path $pt 'adb.exe'))) { throw "no platform-tools\adb.exe on the runner" }
+          $dest = Join-Path $app 'platform-tools'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          foreach ($f in 'adb.exe','AdbWinApi.dll','AdbWinUsbApi.dll','NOTICE.txt','source.properties') {
+            $p = Join-Path $pt $f
+            if (Test-Path $p) { Copy-Item $p $dest } else { Write-Warning "platform-tools\$f not found on the runner" }
+          }
+
+          Copy-Item windows-host\packaging\README-WINDOWS.txt     $app
+          Copy-Item windows-host\packaging\Get-Adb.ps1            $app
+          Copy-Item windows-host\packaging\THIRD-PARTY-NOTICES.md $app
+          Copy-Item LICENSE                                       $app
+
+          foreach ($required in 'seam-agent.jar','platform-tools\adb.exe','README-WINDOWS.txt','LICENSE') {
+            if (-not (Test-Path (Join-Path $app $required))) { throw "$required missing from the app folder" }
+          }
+          Write-Host "app folder ready: $(Get-ChildItem $app -Recurse -File).Count files"
+
+      # ---------------------------------------------------------------- app folder tests
+      - name: App folder - self-test and resource diagnostics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $PWD '.github\scripts\Invoke-SeamCommand.ps1')
+
+          $exe = Join-Path $env:APP_DIR 'seam-host.exe'
+          $appFull = (Resolve-Path $env:APP_DIR).Path
+
+          Write-Host "`n--- --diagnose (from the app folder) ---"
+          $diag = Invoke-SeamCommand -Path $exe -ArgumentList '--diagnose'
+          Write-Host $diag.StdOut
+          if ($diag.StdErr) { Write-Host $diag.StdErr }
+          if ($diag.ExitCode -ne 0) { throw "--diagnose reported a problem (exit $($diag.ExitCode))" }
+          if ($diag.StdOut -notmatch 'RESULT: all bundled resources found') { throw "diagnostics did not report all resources found" }
+          if ($diag.StdOut -notmatch 'source   : bundled with SEAM')        { throw "adb was NOT resolved from the bundle (it fell back to PATH)" }
+          if ($diag.StdOut -notmatch [regex]::Escape($appFull))             { throw "diagnostics did not report the app folder $appFull" }
+
+          Write-Host "`n--- --self-test (from the app folder) ---"
+          $test = Invoke-SeamCommand -Path $exe -ArgumentList '--self-test'
+          Write-Host $test.StdOut
+          if ($test.StdErr) { Write-Host $test.StdErr }
+          if ($test.ExitCode -ne 0) { throw "app-folder self-test FAILED (exit $($test.ExitCode))" }
+
+          # CWD independence: run it from C:\ with an absolute path. A build that depended on the
+          # launch directory would fail this.
+          Write-Host "`n--- --diagnose from C:\ (working-directory independence) ---"
+          $rootRun = Invoke-SeamCommand -Path $exe -ArgumentList '--diagnose' -WorkingDirectory 'C:\'
+          if ($rootRun.ExitCode -ne 0) { throw "--diagnose failed when launched from C:\ (exit $($rootRun.ExitCode))" }
+          if ($rootRun.StdOut -notmatch [regex]::Escape($appFull)) { throw "resource resolution changed with the working directory" }
+          Write-Host "still resolved: $appFull"
+      - name: Desktop UI - GUI subsystem, window construction and screenshot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          trap { Write-Host "::error title=Desktop UI::$($_.Exception.Message)"; exit 1 }
+          . (Join-Path $PWD '.github\scripts\Invoke-SeamCommand.ps1')
+
+          $exe = Join-Path $env:APP_DIR 'seam-host.exe'
+
+          # "No console flashes on double-click" is a property of the PE header: a GUI-subsystem
+          # binary (2) never allocates a console, a console binary (3) does. Assert it rather
+          # than trusting the project file.
+          function Get-PeSubsystem([string]$Path) {
+            $stream = [System.IO.File]::OpenRead($Path)
+            try {
+              $reader = New-Object System.IO.BinaryReader($stream)
+              $stream.Position = 0x3C
+              $peOffset = $reader.ReadInt32()
+              $stream.Position = $peOffset
+              if ($reader.ReadUInt32() -ne 0x00004550) { throw "$Path is not a PE file" }
+              $stream.Position = $peOffset + 24 + 68   # optional header + Subsystem field
+              return $reader.ReadUInt16()
+            } finally { $stream.Dispose() }
+          }
+
+          $subsystem = Get-PeSubsystem $exe
+          Write-Host "PE subsystem: $subsystem (2 = Windows GUI, 3 = console)"
+          if ($subsystem -ne 2) {
+            throw "seam-host.exe is a console-subsystem binary ($subsystem); double-clicking would flash a console window"
+          }
+
+          # Build the real window, lay it out, render it to a PNG and exit without a message loop.
+          # Proves the UI initialises on a machine with no phone and no interactive input.
+          $shot = Join-Path $PWD 'build\ui-preview.png'
+          $ui = Invoke-SeamCommand -Path $exe -ArgumentList '--ui-smoke', '--ui-screenshot', $shot -TimeoutSeconds 180
+          Write-Host $ui.StdOut
+          if ($ui.StdErr) { Write-Host $ui.StdErr }
+          if ($ui.ExitCode -ne 0) { throw "UI smoke test FAILED (exit $($ui.ExitCode))" }
+
+          if (-not (Test-Path $shot)) { throw "the UI screenshot was not written to $shot" }
+          $png = Get-Item $shot
+          if ($png.Length -lt 15000) { throw "the UI screenshot is implausibly small ($($png.Length) bytes)" }
+          Write-Host ("UI screenshot: {0} ({1:N0} bytes)" -f $png.FullName, $png.Length)
+          Write-Host "::notice title=Desktop UI::PE subsystem=GUI (no console), window built and rendered, $($png.Length) byte screenshot"
+
+      # What a user actually does: double-click the icon. --ui-smoke builds the form
+      # synchronously and returns WITHOUT entering Application.Run, so it cannot see the
+      # interactive path (message loop, timers, Shown handler, close path). This step launches
+      # seam-host.exe with no arguments, waits for its main window, proves the message loop is
+      # pumping (SendMessageTimeout WM_NULL), closes it with WM_CLOSE and asserts a clean exit
+      # with no leftover process. The script skips - loudly, with a warning annotation - if the
+      # job has no interactive desktop, rather than reporting a failure it cannot attribute.
+      - name: Desktop UI - interactive launch, message loop and clean close
+        shell: pwsh
+        run: |
+          $script = Join-Path $PWD '.github\scripts\Test-SeamGuiLifecycle.ps1'
+          $exe    = Join-Path $env:APP_DIR 'seam-host.exe'
+          pwsh -NoProfile -NonInteractive -File $script -ExePath $exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "the interactive GUI lifecycle test failed (exit $LASTEXITCODE)"
+          }
+
+      - name: App folder - path with spaces and parentheses
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $PWD '.github\scripts\Invoke-SeamCommand.ps1')
+
+          $spaced = 'build\verify spaces\SEAM Windows x64 (portable)'
+          Remove-Item -Recurse -Force 'build\verify spaces' -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $spaced | Out-Null
+          Copy-Item "$env:APP_DIR\*" $spaced -Recurse
+          $spacedFull = (Resolve-Path $spaced).Path
+
+          $exe = Join-Path $spacedFull 'seam-host.exe'
+          $diag = Invoke-SeamCommand -Path $exe -ArgumentList '--diagnose'
+          if ($diag.ExitCode -ne 0) { throw "--diagnose failed from a path with spaces (exit $($diag.ExitCode))" }
+          if ($diag.StdOut -notmatch 'source   : bundled with SEAM') { throw "adb not resolved from the bundle in a spaced path" }
+          if ($diag.StdOut -notmatch [regex]::Escape($spacedFull))   { throw "app dir not reported correctly for a spaced path" }
+          if ($diag.StdOut -notmatch [regex]::Escape((Join-Path $spacedFull 'platform-tools\adb.exe'))) {
+            throw "adb path not resolved to the spaced folder"
+          }
+
+          $test = Invoke-SeamCommand -Path $exe -ArgumentList '--self-test'
+          if ($test.ExitCode -ne 0) { throw "self-test FAILED from a path with spaces (exit $($test.ExitCode))" }
+          Write-Host "spaced-path checks passed: $spacedFull"
+      - name: Build SEAM-Windows-x64.zip from the app folder
+        id: pack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:APP_DIR
+
+          $info = @(
+            "SEAM for Windows x64 - build information"
+            "========================================"
+            ""
+            "commit      : $env:GITHUB_SHA"
+            "ref         : $env:GITHUB_REF"
+            "workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            "built at    : $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) UTC"
+            "runner      : $env:RUNNER_IMAGE_OS $env:RUNNER_IMAGE_VERSION ($env:RUNNER_ARCH)"
+            "dotnet      : $(& dotnet --version)"
+            "target      : net8.0, win-x64, self-contained (folder layout, not single-file)"
+            "adb         : bundled in platform-tools\ (Android SDK Platform-Tools)"
+            ""
+            "seam-host.exe  : $((Get-FileHash (Join-Path $app 'seam-host.exe')  -Algorithm SHA256).Hash)"
+            "seam-agent.jar : $((Get-FileHash (Join-Path $app 'seam-agent.jar') -Algorithm SHA256).Hash)"
+            "platform-tools : $((Get-FileHash (Join-Path $app 'platform-tools\adb.exe') -Algorithm SHA256).Hash)"
+            ""
+            "Run seam-host.exe --diagnose to see what it resolved; --self-test for offline checks."
+            ""
+            "Built from source by .github/workflows/windows-build.yml."
+            "Nothing here has been validated on physical Windows hardware or a physical phone"
+            "by the build itself: see README-WINDOWS.txt for what to test first."
+          )
+          $info | Set-Content -Path (Join-Path $app 'BUILD-INFO.txt') -Encoding UTF8
+
+          # Flat archive: the FILES go at the ZIP root. Windows Explorer's "Extract All"
+          # already creates a folder named after the ZIP, so nesting a SEAM-Windows-x64
+          # folder inside produced the "two identically named folders" problem users hit.
+          Compress-Archive -Path (Join-Path $app '*') -DestinationPath build\SEAM-Windows-x64.zip -CompressionLevel Optimal -Force
+
+          $zip = Get-Item build\SEAM-Windows-x64.zip
+          $sha = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash
+          Write-Host ("ZIP: {0}  {1:N2} MB  sha256={2}" -f $zip.FullName, ($zip.Length / 1MB), $sha)
+
+          "zip=build\SEAM-Windows-x64.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "size=$($zip.Length)"            | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "sha256=$sha"                    | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Verify the packaged ZIP (unzip, layout, self-test from the extracted copy)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $verify = 'build\verify'
+          Remove-Item -Recurse -Force $verify -ErrorAction SilentlyContinue
+          Expand-Archive -Path build\SEAM-Windows-x64.zip -DestinationPath $verify -Force
+
+          # Guard against the old nested layout: files must sit at the ZIP root.
+          if (Test-Path (Join-Path $verify 'SEAM-Windows-x64')) {
+            throw "ZIP contains a nested SEAM-Windows-x64/ folder (flat layout required)"
+          }
+
+          $expected = @(
+            'seam-host.exe', 'seam-host.dll', 'hostfxr.dll', 'coreclr.dll',
+            'seam-agent.jar', 'Get-Adb.ps1', 'README-WINDOWS.txt',
+            'THIRD-PARTY-NOTICES.md', 'BUILD-INFO.txt', 'LICENSE',
+            'platform-tools\adb.exe', 'platform-tools\AdbWinApi.dll', 'platform-tools\AdbWinUsbApi.dll'
+          )
+          $missing = @($expected | Where-Object { -not (Test-Path (Join-Path $verify $_)) })
+          if ($missing.Count -gt 0) { throw "ZIP is missing: $($missing -join ', ')" }
+
+          $bytes = (Get-ChildItem $verify -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("ZIP expands to {0} files, {1:N0} bytes - all {2} required entries present" -f `
+            (Get-ChildItem $verify -Recurse -File).Count, $bytes, $expected.Count)
+
+          # Byte-preserving extraction: every file in the ZIP must match build\app exactly.
+          $mismatch = @()
+          Get-ChildItem $verify -Recurse -File | ForEach-Object {
+            $rel  = $_.FullName.Substring((Resolve-Path $verify).Path.Length + 1)
+            $orig = Join-Path (Resolve-Path $env:APP_DIR).Path $rel
+            if (-not (Test-Path $orig)) { $mismatch += "$rel (not in app folder)"; return }
+            if ((Get-FileHash $_.FullName).Hash -ne (Get-FileHash $orig).Hash) { $mismatch += "$rel (hash differs)" }
+          }
+          if ($mismatch.Count -gt 0) { throw "ZIP contents differ from the app folder: $($mismatch -join '; ')" }
+          Write-Host "byte-for-byte identical to the app folder"
+
+          $manifest = (Get-ChildItem $verify -File | Sort-Object Name |
+                       ForEach-Object { "$($_.Name)=$($_.Length)" }) -join ' '
+          Write-Host "::notice title=SEAM-Windows-x64.zip manifest::$manifest"
+
+          . (Join-Path $PWD '.github\scripts\Invoke-SeamCommand.ps1')
+          $zipExe = Join-Path $verify 'seam-host.exe'
+
+          Write-Host "`n--- run the packaged binary from the extracted folder ---"
+          $zipTest = Invoke-SeamCommand -Path $zipExe -ArgumentList '--self-test'
+          Write-Host (($zipTest.StdOut -split "`n" | Select-Object -Last 6) -join "`n")
+          if ($zipTest.ExitCode -ne 0) { throw "the binary inside SEAM-Windows-x64.zip FAILED its self-test (exit $($zipTest.ExitCode))" }
+
+          $zipDiag = Invoke-SeamCommand -Path $zipExe -ArgumentList '--diagnose'
+          if ($zipDiag.ExitCode -ne 0) { throw "the binary inside SEAM-Windows-x64.zip FAILED --diagnose (exit $($zipDiag.ExitCode))" }
+          if ($zipDiag.StdOut -notmatch 'source   : bundled with SEAM') { throw "the binary inside the ZIP did not use its bundled adb" }
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value @(
+            '',
+            '### ZIP manifest (verified by expanding the artifact)',
+            '',
+            '| file | bytes |',
+            '|---|---|'
+          )
+          Get-ChildItem $verify -File | Sort-Object Name |
+            ForEach-Object { "| ``$($_.Name)`` | $($_.Length) |" } |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      # Windows PowerShell 5.1 (powershell.exe) is what people actually run on Windows 11,
+      # and it is NOT PowerShell 7. A BOM-less UTF-8 script is read as ANSI by 5.1, so a UTF-8
+      # em dash turns into a typographic quote and cascades into ParserErrors - that shipped once.
+      # Get-Adb.ps1 is no longer needed to install adb (it is bundled); it stays as a repair
+      # tool, so it must still work.
+      - name: Get-Adb.ps1 - Windows PowerShell 5.1 compatibility and repair test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "This step must run on Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
+          }
+          Write-Host "shell: Windows PowerShell $($PSVersionTable.PSVersion)"
+
+          $pkg    = Join-Path $env:GITHUB_WORKSPACE 'build\verify'
+          $script = Join-Path $pkg 'Get-Adb.ps1'
+          if (-not (Test-Path -LiteralPath $script)) { throw "Get-Adb.ps1 missing from the packaged ZIP" }
+
+          # --- encoding guards -------------------------------------------------
+          $bytes = [System.IO.File]::ReadAllBytes($script)
+          if (-not ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)) {
+            throw "Get-Adb.ps1 has no UTF-8 BOM; Windows PowerShell 5.1 would read it as ANSI"
+          }
+          $badOffsets = @()
+          for ($i = 3; $i -lt $bytes.Length; $i++) {
+            if ($bytes[$i] -gt 127) { $badOffsets += $i }
+          }
+          if ($badOffsets.Count -gt 0) {
+            $show = $badOffsets[0..([Math]::Min(9, $badOffsets.Count - 1))] -join ', '
+            throw "Get-Adb.ps1 contains $($badOffsets.Count) non-ASCII byte(s) (offsets: $show)"
+          }
+          Write-Host ("encoding: UTF-8 BOM + {0} ASCII bytes - OK" -f ($bytes.Length - 3))
+
+          # --- parse under 5.1 -------------------------------------------------
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors)
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host ("PARSE {0}:{1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message) }
+            throw "$($errors.Count) parse error(s) in Get-Adb.ps1 under Windows PowerShell 5.1"
+          }
+          Write-Host ("parse: 0 errors, {0} tokens - OK" -f $tokens.Count)
+
+          # --- functional: already bundled (must be a fast no-op, exit 0) ------
+          $adb = Join-Path $pkg 'platform-tools\adb.exe'
+          if (-not (Test-Path -LiteralPath $adb)) { throw "the ZIP does not contain platform-tools\adb.exe" }
+          $bundledHash = (Get-FileHash -LiteralPath $adb -Algorithm SHA256).Hash
+
+          Write-Host "`n--- run 1: adb already bundled (no-op) ---"
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+          $sw.Stop()
+          if ($LASTEXITCODE -ne 0) { throw "Get-Adb.ps1 no-op run failed with exit code $LASTEXITCODE" }
+          if ($sw.Elapsed.TotalSeconds -gt 60) { throw "no-op run took $([int]$sw.Elapsed.TotalSeconds)s - it probably re-downloaded" }
+          if ((Get-FileHash -LiteralPath $adb -Algorithm SHA256).Hash -ne $bundledHash) {
+            throw "the bundled adb.exe was replaced by the repair helper"
+          }
+          Write-Host ("no-op run: {0:N1}s, bundled adb untouched - OK" -f $sw.Elapsed.TotalSeconds)
+
+          # --- functional: damaged install is repaired, not trusted ------------
+          Write-Host "`n--- run 2: platform-tools present but adb.exe missing (must repair) ---"
+          Remove-Item -LiteralPath $adb -Force
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+          if ($LASTEXITCODE -ne 0) { throw "Get-Adb.ps1 repair run failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath $adb)) { throw "adb.exe was not restored" }
+          & $adb version
+          if ($LASTEXITCODE -ne 0) { throw "repaired adb.exe does not run" }
+          Write-Host "repair run: adb.exe restored - OK"
+
+          $ptDir     = Join-Path $pkg 'platform-tools'
+          $version   = (& $adb version) -join ' | '   # 'adb version', not 'adb -version'
+          if ($LASTEXITCODE -ne 0) { throw "'adb version' failed with exit code $LASTEXITCODE" }
+          $fileCount = (Get-ChildItem -LiteralPath $ptDir -File).Count
+          Write-Host "::notice title=Get-Adb.ps1 verified on Windows PowerShell 5.1::$version ; platform-tools files=$fileCount"
+
+          # Do not let a native command's exit code leak into the step result.
+          exit 0
+
+      # ---------------------------------------------------------------- installer
+      - name: Build SEAM-Setup-x64.exe (Inno Setup, same app folder)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $candidate = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+            if (Test-Path $candidate) { $iscc = $candidate }
+          }
+          if (-not $iscc) { throw "Inno Setup compiler (iscc.exe) not found on this runner" }
+          Write-Host "iscc: $iscc"
+
+          # Installer version comes from the product version in the csproj, not from the SDK.
+          $csproj  = Get-Content $env:PROJECT -Raw
+          $version = if ($csproj -match '<Version>([0-9]+\.[0-9]+\.[0-9]+)') { $Matches[1] } else { '0.0.0' }
+          Write-Host "installer version: $version"
+
+          Remove-Item -Recurse -Force build\installer -ErrorAction SilentlyContinue
+          & $iscc "/DAppVersion=$version" "/DSourceDir=$((Resolve-Path $env:APP_DIR).Path)" `
+                  "/O$(Join-Path (Get-Location) 'build\installer')" `
+                  "windows-host\installer\SEAM.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+
+          $setup = 'build\installer\SEAM-Setup-x64.exe'
+          if (-not (Test-Path $setup)) { throw "$setup was not produced" }
+          $file = Get-Item $setup
+          $sha  = (Get-FileHash $file.FullName -Algorithm SHA256).Hash
+          Write-Host ("installer: {0}  {1:N2} MB  sha256={2}" -f $file.FullName, ($file.Length / 1MB), $sha)
+
+          # A truncated or non-PE "installer" must never be uploaded.
+          if ($file.Length -lt 5MB) { throw "installer is implausibly small ($($file.Length) bytes)" }
+          $magic = New-Object 'byte[]' 2
+          $stream = [System.IO.File]::OpenRead($file.FullName)
+          try { [void]$stream.Read($magic, 0, 2) } finally { $stream.Dispose() }
+          if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) { throw "installer is not a PE executable (no MZ header)" }
+
+          "path=$($file.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "sha256=$sha"            | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: setup
+
+      - name: Install silently, run from the install dir, upgrade, then uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup  = '${{ steps.setup.outputs.path }}'
+          $target = 'C:\Program Files\Seam Verification (x64)'
+          $keyDir = Join-Path $env:USERPROFILE '.seam'
+          $key    = Join-Path $keyDir 'auth_key'
+
+          Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue
+
+          # Pairing data that existed BEFORE the install must survive both steps.
+          New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+          if (-not (Test-Path $key)) {
+            $bytes = New-Object 'byte[]' 32
+            [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+            [System.IO.File]::WriteAllText($key, (($bytes | ForEach-Object { $_.ToString('x2') }) -join ''))
+          }
+          $keyHashBefore = (Get-FileHash $key -Algorithm SHA256).Hash
+          Write-Host "pairing key before install: $key ($keyHashBefore)"
+
+          # ---- install ----
+          Write-Host "`n--- installing to $target ---"
+          $log = Join-Path $env:RUNNER_TEMP 'seam-install.log'
+          # Start-Process does not quote arguments: /DIR needs explicit quotes so that
+          # "Program Files" and the parentheses survive as one argument.
+          $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
+                 '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCANCEL',"/LOG=$log",'/DIR="{0}"' -f $target)
+          Write-Host "installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Get-Content $log -Tail 40 | Write-Host; throw "installer failed (exit $($p.ExitCode))" }
+
+          foreach ($required in 'seam-host.exe','seam-agent.jar','platform-tools\adb.exe','README-WINDOWS.txt','unins000.exe') {
+            $path = Join-Path $target $required
+            if (-not (Test-Path $path)) { throw "installed app is missing $required" }
+          }
+
+          # ---- the installed app must find its own resources ----
+          . (Join-Path $PWD '.github\scripts\Invoke-SeamCommand.ps1')
+
+          $exe  = Join-Path $target 'seam-host.exe'
+          $full = (Resolve-Path $target).Path
+          $diag = Invoke-SeamCommand -Path $exe -ArgumentList '--diagnose' -WorkingDirectory 'C:\Windows'
+          if ($diag.ExitCode -ne 0) { throw "installed --diagnose failed (exit $($diag.ExitCode))" }
+          Write-Host $diag.StdOut
+          if ($diag.StdOut -notmatch 'RESULT: all bundled resources found') { throw "installed app did not find all resources" }
+          if ($diag.StdOut -notmatch 'source   : bundled with SEAM')        { throw "installed app did not use its bundled adb" }
+          if ($diag.StdOut -notmatch [regex]::Escape((Join-Path $full 'platform-tools\adb.exe'))) {
+            throw "installed app did not resolve adb inside the install folder"
+          }
+
+          $test = Invoke-SeamCommand -Path $exe -ArgumentList '--self-test' -WorkingDirectory 'C:\Windows'
+          if ($test.ExitCode -ne 0) { throw "installed self-test FAILED (exit $($test.ExitCode))" }
+
+          $ui = Invoke-SeamCommand -Path $exe -ArgumentList '--ui-smoke' -WorkingDirectory 'C:\Windows'
+          if ($ui.ExitCode -ne 0) { throw "installed UI smoke test FAILED (exit $($ui.ExitCode))" }
+          Write-Host $ui.StdOut
+
+          # ---- Installed-apps registration ----
+          $entry = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+                   Where-Object { $_.DisplayName -like 'SEAM*' } | Select-Object -First 1
+          if (-not $entry) { throw "SEAM is not registered in Installed apps" }
+          Write-Host "Installed apps entry: '$($entry.DisplayName)' $($entry.DisplayVersion) uninstall='$($entry.UninstallString)'"
+          if (-not $entry.UninstallString) { throw "Installed-apps entry has no uninstaller" }
+          Write-Host "::notice title=Installed-apps entry::$($entry.DisplayName) | $($entry.DisplayVersion) | $($entry.InstallLocation)"
+
+          # ---- upgrade in place (second silent install) ----
+          Write-Host "`n--- reinstalling (upgrade path) ---"
+          $p2 = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
+                  '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCANCEL',"/LOG=$log")
+          Write-Host "second installer exit code: $($p2.ExitCode)"
+          if ($p2.ExitCode -ne 0) { throw "reinstall failed (exit $($p2.ExitCode))" }
+          if (-not (Test-Path $exe)) { throw "seam-host.exe missing after the second install" }
+          if ((Get-FileHash $key -Algorithm SHA256).Hash -ne $keyHashBefore) {
+            throw "the pairing key changed during an upgrade"
+          }
+          Write-Host "upgrade preserved the pairing key"
+
+          # ---- uninstall ----
+          Write-Host "`n--- uninstalling ---"
+          $uninst = Join-Path $target 'unins000.exe'
+          $p3 = Start-Process -FilePath $uninst -Wait -PassThru -ArgumentList @(
+                  '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$log")
+          Write-Host "uninstaller exit code: $($p3.ExitCode)"
+
+          # The uninstaller deletes itself asynchronously; give it a moment.
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path (Join-Path $target 'seam-host.exe')) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Path (Join-Path $target 'seam-host.exe')) { throw "uninstall left seam-host.exe behind" }
+          Write-Host "install folder removed: $(Test-Path $target)"
+
+          # User data must survive a normal (non-interactive) uninstall.
+          if (-not (Test-Path $key)) { throw "uninstall deleted the pairing key without being asked" }
+          if ((Get-FileHash $key -Algorithm SHA256).Hash -ne $keyHashBefore) { throw "uninstall modified the pairing key" }
+          Write-Host "pairing key preserved across uninstall: $key"
+
+          $entryAfter = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+                        Where-Object { $_.DisplayName -like 'SEAM*' }
+          if ($entryAfter) { throw "Installed-apps entry still present after uninstall: $($entryAfter.DisplayName)" }
+          Write-Host "Installed-apps entry removed"
+
+      # ---------------------------------------------------------------- artifacts
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          # archive:false uploads the .zip verbatim, so the artifact IS SEAM-Windows-x64.zip
+          # (no second zip wrapping it) and its reported size is the real file size.
+          name: SEAM-Windows-x64
+          path: build/SEAM-Windows-x64.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days || 30 }}
+
+      - name: Upload UI screenshot
+        uses: actions/upload-artifact@v7
+        with:
+          name: SEAM-ui-preview
+          path: build/ui-preview*.png
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention_days || 30 }}
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: SEAM-Setup-x64
+          path: build/installer/SEAM-Setup-x64.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days || 30 }}
+
+      # Supplementary: the protocol fixtures are NOT a compilation gate and never replace one.
+      - name: Protocol fixture checks (supplementary, not a compile gate)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          python tools/verify_protocol.py
+          python tools/check_java_parity.py
+
+      - name: Job summary
+        if: always()
+        shell: pwsh
+        run: |
+          $status = '${{ job.status }}'
+          $size   = ${{ steps.pack.outputs.size || 0 }}
+          $sha    = '${{ steps.pack.outputs.sha256 }}'
+          $lines = @(
+            "## SEAM Windows build - $status",
+            "",
+            "| item | value |",
+            "|---|---|",
+            "| commit | ``${{ github.sha }}`` |",
+            "| runner | ``${{ runner.os }}`` / ${{ runner.arch }} |",
+            "| portable | ``SEAM-Windows-x64`` artifact (download from this run's Summary page) |",
+            "| installer | ``SEAM-Setup-x64`` artifact |",
+            "| ZIP size | $([math]::Round($size / 1MB, 2)) MB |",
+            "| ZIP sha256 | ``$sha`` |",
+            "| installer sha256 | ``${{ steps.setup.outputs.sha256 }}`` |",
+            "",
+            "Download: **Actions -> this run -> Artifacts**.",
+            "Both artifacts are built from the same ``build\app`` folder and were installed",
+            "and uninstalled on this runner. Nothing here has been tested on a physical phone."
+          )
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

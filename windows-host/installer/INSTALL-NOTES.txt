@@ -1,0 +1,30 @@
+SEAM is installed
+=================
+
+Start it from the Start Menu ("SEAM") or the desktop shortcut. The SEAM window opens;
+there is no console window to close.
+
+1. Prepare the phone once
+   Settings -> About phone -> tap "Build number" 7x, then
+   Settings -> Developer options -> USB debugging -> on.
+   Plug the cable in and tap ALLOW on the phone.
+
+2. In SEAM
+   The window shows the phone when adb can see it. Press Connect: SEAM pushes the
+   Android agent, authenticates, and turns the status pill green.
+   Move the pointer to the named screen edge to control the phone.
+   Ctrl + Alt + Q always returns control to Windows.
+
+3. Nothing else to install
+   Android Platform-Tools (adb) and the agent are inside C:\Program Files\SEAM.
+   No PATH edits, no %TEMP% copying, no .NET download.
+
+If something does not work
+--------------------------
+  Use the Diagnostics button in the window, or Start Menu -> "SEAM diagnostics".
+  It prints every path SEAM searched and what adb reports, and never your pairing key.
+
+Your pairing key lives at %USERPROFILE%\.seam\auth_key and survives upgrades.
+Uninstalling SEAM asks before deleting it, and keeps it if you say no.
+
+Full notes: README-WINDOWS.txt in the SEAM install folder.

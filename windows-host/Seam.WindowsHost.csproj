@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows desktop host: a WinForms application that also keeps the original command-line
+    modes (self-test, diagnose, trajectory, capture, connect).
+
+    Why one project and not "core library + console app + GUI app":
+      - the CLI and the window drive the same primitives (AppLayout, SeamAuthenticator,
+        AdbBootstrapper, SeamConnection, WindowsInputCapture), so a split would add a project
+        and a packaging step without removing any code;
+      - one executable means one artifact, one installer entry, and no second copy of the
+        bundled adb/agent search paths;
+      - OutputType=WinExe removes the console window that used to flash on a double-click,
+        while Program.Main still attaches to the parent console (or writes to redirected
+        stdout) for the CLI modes.
+
+    Note: XML comments cannot contain double hyphens, which is why the CLI switches above are
+    written without their leading dashes.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>Seam.WindowsHost</RootNamespace>
+    <AssemblyName>seam-host</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+
+    <!-- DPI + OS compatibility live in the manifest so they apply before any managed code. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+
+    <!-- Product identity: Task Manager, file properties and Windows "Installed apps". -->
+    <Product>SEAM</Product>
+    <AssemblyTitle>SEAM</AssemblyTitle>
+    <Description>SEAM - share one mouse and keyboard between Windows and an Android phone.</Description>
+    <Company>SEAM</Company>
+    <Copyright>MIT (c) 2026 Feranmi Oresajo</Copyright>
+    <Version>0.10.0</Version>
+    <FileVersion>0.10.0.0</FileVersion>
+    <ApplicationIcon>packaging\seam.ico</ApplicationIcon>
+
+    <!-- Only English resources are shipped; keeps the self-contained folder small. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <PublishTrimmed>false</PublishTrimmed>
+
+    <!-- Lets a macOS/Linux checkout at least *compile* the Windows project (CI and releases
+         are built on Windows). WinForms runs only on Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      UseWindowsForms adds System.Windows.Forms and System.Drawing as global usings. The host
+      code declares its usings explicitly, and the global ones make `Timer` ambiguous between
+      System.Threading.Timer (the heartbeat in SeamConnection) and System.Windows.Forms.Timer.
+      Removing them keeps the original, explicit style.
+    -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+</Project>

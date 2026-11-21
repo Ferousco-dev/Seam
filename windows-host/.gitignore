@@ -1,0 +1,6 @@
+bin/
+obj/
+*.user
+
+# Installed by packaging/Get-Adb.ps1 when run in-place
+platform-tools/
