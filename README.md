@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>One cursor. Every screen.</strong><br/>
-  Seamless, non-root mouse, keyboard, smooth scrolling, and clipboard sharing between <strong>macOS</strong>, <strong>Linux</strong>, and <strong>Android</strong>, with <strong>Windows</strong> coming next.
+  Seamless, non-root mouse, keyboard, smooth scrolling, and clipboard sharing between <strong>macOS</strong>, <strong>Linux</strong>, <strong>Windows</strong>, and <strong>Android</strong>.
 </p>
 
 <p align="center">
@@ -14,16 +14,17 @@
   &nbsp;
   <a href="https://github.com/Ferousco-dev/Seam/releases/latest"><img src="assets/download-linux.svg" alt="Download for Linux • Includes Android Agent" height="46"></a>
   &nbsp;
-  <img src="assets/windows-soon.svg" alt="Coming soon for Windows" height="46">
+  <a href="https://github.com/Ferousco-dev/Seam/releases/download/v1.1.0/SEAM-Setup-x64.exe"><img src="assets/download-windows.svg" alt="Download for Windows • Includes Android Agent" height="46"></a>
 </p>
 
 <p align="center">
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B%20(Liquid%20Glass)-000000?style=flat-square&logo=apple&logoColor=white">
   <img alt="Linux X11 / GTK3" src="https://img.shields.io/badge/Linux-X11%20%2F%20GTK3-FCC624?style=flat-square&logo=linux&logoColor=black">
+  <img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%20%2F%2011%20(WinForms)-0078D4?style=flat-square&logo=windows&logoColor=white">
   <img alt="Android 11-15+" src="https://img.shields.io/badge/Android-11--15%2B%20(Non--Root)-3DDC84?style=flat-square&logo=android&logoColor=white">
-  <img alt="Windows Soon" src="https://img.shields.io/badge/Windows-Coming%20Soon-0078D4?style=flat-square&logo=windows&logoColor=white">
   <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-Linux%20Host-DEA584?style=flat-square&logo=rust&logoColor=black">
+  <img alt="C# .NET 8" src="https://img.shields.io/badge/C%23-.NET%208%20(Windows)-512BD4?style=flat-square&logo=dotnet&logoColor=white">
   <img alt="Java 17" src="https://img.shields.io/badge/Java-17%20(d8%20DEX)-ED8B00?style=flat-square&logo=openjdk&logoColor=white">
   <a href="CONTRIBUTING.md"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-2ea44f?style=flat-square"></a>
@@ -45,9 +46,9 @@
 
 ## What is SEAM?
 
-**SEAM** brings an Apple Universal Control experience to **macOS, Linux, and Android** (with Windows support coming next).
+**SEAM** brings an Apple Universal Control experience to **macOS, Linux, Windows, and Android**.
 
-Move your desktop cursor past the edge of your display and it flows directly onto your Android phone sitting beside your laptop. Unlike screen-mirroring tools (`scrcpy`) that trap your pointer inside a desktop video window, or accessibility-based apps that draw fake overlay cursors, SEAM registers real virtual hardware HID devices in Android's Linux kernel (`/dev/uhid`) without root. You get Android's genuine native hardware pointer, 120 Hz smooth scrolling, desktop keyboard shortcuts, and automatic bidirectional clipboard sync over USB or Wi-Fi, from a native macOS menu-bar app or a Linux GTK 3 Control Center & CLI, with no Android app to install.
+Move your desktop cursor past the edge of your display and it flows directly onto your Android phone sitting beside your computer. Unlike screen-mirroring tools (`scrcpy`) that trap your pointer inside a desktop video window, or accessibility-based apps that draw fake overlay cursors, SEAM registers real virtual hardware HID devices in Android's Linux kernel (`/dev/uhid`) without root. You get Android's genuine native hardware pointer, 120 Hz smooth scrolling, desktop keyboard shortcuts, and automatic bidirectional clipboard sync over USB or Wi-Fi, from a native macOS menu-bar app, a Linux GTK 3 Control Center & CLI, or a native Windows desktop application, with no Android app to install.
 
 ---
 
@@ -94,16 +95,21 @@ Move your desktop cursor past the edge of your display and it flows directly ont
    seam connect --edge right    # Headless screen-edge session
    ```
 
-### 3. Android Setup (Automatic, Zero APK)
+### 3. Windows Setup (Windows 10 / 11 x64)
+1. **Installer (Recommended):** Download **[SEAM-Setup-x64.exe](https://github.com/Ferousco-dev/Seam/releases/download/v1.1.0/SEAM-Setup-x64.exe)** from the [latest GitHub Release](https://github.com/Ferousco-dev/Seam/releases/latest), run the installer, and launch **SEAM** from the Start Menu. (Windows SmartScreen will prompt because builds are unsigned: click **More info → Run anyway**).
+2. **Portable ZIP:** Download **[SEAM-Windows-x64.zip](https://github.com/Ferousco-dev/Seam/releases/download/v1.1.0/SEAM-Windows-x64.zip)**, unzip anywhere, and run `seam-host.exe`.
+3. SEAM for Windows bundles the host, .NET runtime, Android agent, and ADB platform-tools. No external dependencies required.
+
+### 4. Android Setup (Automatic, Zero APK)
 1. Enable **USB Debugging** (or **Wireless Debugging**) once under Android **Developer Options**.
 2. Plug your phone in for a moment (or connect via Wireless Debugging). **SEAM** automatically pushes the `32 KB` `seam-agent.jar` agent, starts the `/dev/uhid` virtual mouse & keyboard, and attaches both **USB** and **Wi-Fi** links.
 3. Unplug anytime: the background daemon keeps Wi-Fi (`TCP/UDP 27186`) ready for cable-free reconnection.
 4. *(macOS Optional)* Grant **SEAM** permission in **System Settings → Privacy & Security → Accessibility** to enable global `CGEventTap` capture alongside the built-in non-activating panel fallback.
 
 ### Controls & Shortcuts
-- **Edge Crossing:** Move your pointer past the side where you positioned your phone. Drag either tile inside the macOS popover or Linux Control Center to match your desk.
-- **Desktop Shortcuts on Android:** On macOS, `Cmd+C` / `Cmd+V` / `Cmd+X` / `Cmd+A` / `Cmd+Z`, `Cmd+Left/Right` (line start/end), `Cmd+Up/Down` (document top/bottom), `Opt+Left/Right` (word jump), and `Opt+Backspace` (delete word) translate cleanly to Android. On Linux, standard `Ctrl` and `Alt` shortcuts pass straight through.
-- **Emergency Return to Desktop:** **`Ctrl + Option + Q`** or **`Ctrl + Option + Cmd + Esc`** on macOS; **`Ctrl + Alt + Q`** on Linux.
+- **Edge Crossing:** Move your pointer past the side where you positioned your phone. Drag either tile inside the macOS popover, Linux Control Center, or Windows GUI to match your desk.
+- **Desktop Shortcuts on Android:** On macOS, `Cmd+C` / `Cmd+V` / `Cmd+X` / `Cmd+A` / `Cmd+Z`, `Cmd+Left/Right` (line start/end), `Cmd+Up/Down` (document top/bottom), `Opt+Left/Right` (word jump), and `Opt+Backspace` (delete word) translate cleanly to Android. On Linux and Windows, standard `Ctrl` and `Alt` shortcuts pass straight through.
+- **Emergency Return to Desktop:** **`Ctrl + Option + Q`** or **`Ctrl + Option + Cmd + Esc`** on macOS; **`Ctrl + Alt + Q`** on Linux and Windows.
 
 ---
 
@@ -115,10 +121,11 @@ Move your desktop cursor past the edge of your display and it flows directly ont
 | <img src="https://img.shields.io/badge/-SwiftUI_%26_Liquid_Glass-007AFF?style=flat-square&logo=apple&logoColor=white" alt="SwiftUI & Liquid Glass"> | **SwiftUI & Apple Liquid Glass** | macOS menu-bar popover (`GlassEffectContainer`, `.glassEffect`, `.buttonStyle(.glass)` on macOS 26+ with vibrancy fallback) and interactive `ArrangementView` |
 | <img src="https://img.shields.io/badge/-AppKit_%26_Quartz-555555?style=flat-square&logo=apple&logoColor=white" alt="AppKit & Quartz"> | **AppKit & Quartz Event Services** | `NSStatusBar`, `CGEventTap`, `CGAssociateMouseAndMouseCursorPosition`, and non-activating `CaptureShieldPanel` (`NSPanel`) |
 | <img src="https://img.shields.io/badge/-Rust_%2B_X11_%2F_GTK3-DEA584?style=flat-square&logo=rust&logoColor=black" alt="Rust + X11 / GTK3"> | **Rust + X11 / GTK 3** | Native Linux host (`linux-host/`), X11 pointer/keyboard grab & XFixes cursor hiding, X11 clipboard sync, and GTK 3 Control Center |
+| <img src="https://img.shields.io/badge/-C%23_%2B_.NET_8_%2F_WinForms-512BD4?style=flat-square&logo=dotnet&logoColor=white" alt="C# + .NET 8 / WinForms"> | **C# + .NET 8 / WinForms** | Native Windows host (`windows-host/`), graphite dark GUI with Home/Activity/Settings/Diagnostics navigation rail, Win32 input capture hooks, and Inno Setup installer |
 | <img src="https://img.shields.io/badge/-Java_17_%26_d8-ED8B00?style=flat-square&logo=openjdk&logoColor=white" alt="Java 17 & d8"> | **Java 17 + Android SDK `d8`** | Zero-Gradle `32 KB` DEX daemon (`dist/seam-agent.jar`) launched via `app_process` (`uid=2000`) |
 | <img src="https://img.shields.io/badge/-Linux_%2Fdev%2Fuhid-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux /dev/uhid"> | **Linux Kernel `/dev/uhid`** | Registers a 16-bit relative HID Mouse and 6KRO HID Keyboard (`UHID_CREATE2` / `UHID_INPUT2`) directly with `InputReader` |
 | <img src="https://img.shields.io/badge/-AOSP_Binder-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android Binder"> | **Android `InputManagerGlobal` & `IClipboard`** | Injects 120 Hz fractional `MotionEvent.ACTION_SCROLL` events and syncs system clipboard changes via silent timestamp inspection |
-| <img src="https://img.shields.io/badge/-HMAC--SHA256-2E7D32?style=flat-square&logo=letsencrypt&logoColor=white" alt="HMAC-SHA256"> | **CryptoKit, Rust `hmac`/`sha2` & `javax.crypto`** | Mutual HMAC-SHA256 session handshake (`SEAM-Wire v1`) and authenticated 42-byte UDP mouse delta datagrams |
+| <img src="https://img.shields.io/badge/-HMAC--SHA256-2E7D32?style=flat-square&logo=letsencrypt&logoColor=white" alt="HMAC-SHA256"> | **CryptoKit, Rust `hmac`/`sha2`, C# `HMACSHA256` & `javax.crypto`** | Mutual HMAC-SHA256 session handshake (`SEAM-Wire v1`) and authenticated 42-byte UDP mouse delta datagrams |
 | <img src="https://img.shields.io/badge/-USB_%2B_Wi--Fi-0A84FF?style=flat-square&logo=wifi&logoColor=white" alt="Dual Transport"> | **ADB Socket + Hybrid TCP/UDP** | Concurrent USB (`localabstract:seam_uhid`) & Wi-Fi (`TCP/UDP 27186`) multiplexer with automatic cable-pull failover |
 
 ---
@@ -129,14 +136,14 @@ Move your desktop cursor past the edge of your display and it flows directly ont
 
 ```mermaid
 flowchart TB
-    subgraph Host["Desktop Host (macOS SEAM.app / Linux seam)"]
+    subgraph Host["Desktop Host (macOS SEAM.app / Linux seam / Windows seam-host)"]
         direction LR
-        UI["macOS Liquid Glass Popover<br/>or Linux GTK 3 Control Center"]
+        UI["macOS Liquid Glass Popover<br/>Linux GTK 3 Control Center<br/>or Windows WinForms GUI"]
         HID["Physical Trackpad, Mouse & Keyboard"]
-        Capture["QuartzEdgeEngine (macOS)<br/>or X11GrabEngine (Linux X11)"]
-        CursorCtrl["Cursor Decouple & Hide<br/>(Quartz / XFixes)"]
-        KeyMap["HID Keycode Translator<br/>(6KRO + macOS/Linux Shortcuts)"]
-        ClipHost["Host Clipboard Watcher<br/>(NSPasteboard / X11 Selection)"]
+        Capture["QuartzEdgeEngine (macOS)<br/>X11GrabEngine (Linux)<br/>or WindowsInputCapture (Win32)"]
+        CursorCtrl["Cursor Decouple & Hide<br/>(Quartz / XFixes / ClipCursor)"]
+        KeyMap["HID Keycode Translator<br/>(6KRO + macOS/Linux/Win Shortcuts)"]
+        ClipHost["Host Clipboard Watcher<br/>(NSPasteboard / X11 / Win32)"]
         Mux["Transport Multiplexer<br/>(HMAC-SHA256 & Auto-Failover)"]
 
         UI -->|"Edge Position"| Capture
@@ -184,7 +191,7 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Desktop as Desktop Host (macOS / Linux)
+    participant Desktop as Desktop Host (macOS / Linux / Windows)
     participant Link as USB / Wi-Fi (SEAM-Wire v1)
     participant Phone as Android Agent (seam_agent)
     participant OS as Android Kernel & System
@@ -222,8 +229,11 @@ SEAM/
 ├── CONTRIBUTING.md
 ├── LICENSE
 ├── Makefile
-├── .github/workflows/
-│   └── release.yml                   # Automated Linux CI (cargo test) + .deb/.tar.gz release publisher
+├── .github/
+│   ├── scripts/                      # Windows CI execution & GUI lifecycle test scripts
+│   └── workflows/
+│       ├── release.yml               # Linux CI (cargo test) + .deb/.tar.gz release publisher
+│       └── windows-build.yml         # Windows CI (.NET 8, self-test, installer & ZIP packager)
 ├── assets/
 │   ├── app-icon.png                  # Exported 1024×1024 Icon Composer AppIcon
 │   ├── android-native-cursor.jpg     # Native Android hardware pointer screenshot
@@ -233,7 +243,7 @@ SEAM/
 │   ├── social-preview.png            # 1280×640 GitHub social preview card
 │   ├── download-macos.svg
 │   ├── download-linux.svg
-│   └── windows-soon.svg
+│   └── download-windows.svg
 ├── release/
 │   ├── SEAM-macOS-arm64.dmg          # Ready-to-install macOS disk image (bundles Android agent)
 │   └── SEAM-macOS-arm64.zip          # Portable zipped SEAM.app bundle
@@ -263,6 +273,16 @@ SEAM/
 │   │   ├── session/                  # Active session coordinator & edge return handling
 │   │   └── ui/                       # GTK 3 Control Center & interactive arrangement view
 │   └── tests/                        # Protocol, keymap, input, transport & session test suites
+├── windows-host/
+│   ├── Seam.WindowsHost.csproj       # .NET 8 Windows Forms project
+│   ├── Program.cs                    # Desktop app & CLI entrypoint
+│   ├── Gui/                          # MainForm, NavRail, ArrangementPanel, DarkTitleBar, Theme
+│   ├── Host/                         # SessionController, AppLayout, ConnectionDiagnosis, WirelessDiscovery
+│   ├── Input/                        # WindowsInputCapture (low-level hooks & ClipCursor), WindowsKeyTable
+│   ├── Protocol/                     # SeamWireProtocol, SeamAuthenticator, SeamFrames
+│   ├── Transport/                    # SeamConnection (USB ADB socket + Wi-Fi TCP/UDP)
+│   ├── installer/                    # SEAM.iss (Inno Setup 6 compiler script)
+│   └── packaging/                    # Get-Adb.ps1, README-WINDOWS.txt, THIRD-PARTY-NOTICES.md, seam.ico
 ├── android-agent/
 │   └── src/main/java/com/seam/agent/
 │       ├── Main.java                 # Daemon & diagnostics CLI (--server, --info, --self-test, --calibrate)
@@ -273,6 +293,15 @@ SEAM/
 │       ├── transport/                # DualTransportCoordinator, UsbLocalSocketServer, WifiTransportServer
 │       ├── uhid/                     # UhidDevice, HidDescriptors, HidKeycodes
 │       └── telemetry/                # DisplayTelemetry, DisplayMetricsSnapshot, NetworkTelemetry
+├── docs/                             # Architecture assessments, readiness reviews, and host guides
+│   ├── WINDOWS-PORT-ASSESSMENT.md
+│   ├── WINDOWS-READINESS-REVIEW.md
+│   └── windows/                      # Windows install, verification & packaging docs
+│       ├── README.md
+│       ├── INSTALL.md
+│       ├── MANUAL-VERIFICATION.md
+│       └── THIRD-PARTY-NOTICES.md
+├── tools/                            # Protocol conformance, golden vectors & Java parity verification
 └── research/                         # Architecture specifications & protocol notes
 ```
 
@@ -306,6 +335,24 @@ open dist/SEAM.app
 ./scripts/package-linux.sh 1.1.0
 ```
 
+### Windows (10 / 11 x64)
+- **Prerequisites:** **.NET 8 SDK**, **Inno Setup 6** (optional, for installer packaging), plus **JDK 17+** & **Android SDK** if rebuilding `dist/seam-agent.jar`.
+```bash
+# Build Release executable
+dotnet build windows-host/Seam.WindowsHost.csproj -c Release
+
+# Run self-tests
+dotnet run --project windows-host/Seam.WindowsHost.csproj -c Release -- --self-test
+
+# Run protocol parity & OpenSSL golden vector verification
+python3 tools/check_java_parity.py
+python3 tools/verify_protocol.py
+bash tools/verify_vectors_openssl.sh
+
+# Launch SEAM Windows Desktop Application
+dotnet run --project windows-host/Seam.WindowsHost.csproj -c Release
+```
+
 ### Diagnostic & Transport Verification Targets (macOS)
 ```bash
 make edge           # Terminal-based macOS <-> Android edge-crossing session
@@ -324,7 +371,7 @@ See [`research/README.md`](research/README.md) for deep technical specifications
 
 ## Contributing
 
-SEAM is open to pull requests, bug reports, and hardware compatibility feedback (especially Windows host support, Wayland native support, and testing across Android OEMs). See **[CONTRIBUTING.md](CONTRIBUTING.md)** for setup steps, verification commands, and PR guidelines.
+SEAM is open to pull requests, bug reports, and hardware compatibility feedback (testing across Android OEMs, Windows 10/11 multi-monitor edge routing, and Linux Wayland native capture). See **[CONTRIBUTING.md](CONTRIBUTING.md)** for setup steps, verification commands, and PR guidelines.
 
 ---
 

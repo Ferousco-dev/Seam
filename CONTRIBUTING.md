@@ -4,7 +4,7 @@ Pull requests, bug reports, and device compatibility reports are welcome! SEAM i
 
 ## Ways to Contribute
 
-- **Windows Host Support:** Help bring SEAM's `SEAM-Wire v1` host experience (edge crossing, cursor decoupling, clipboard sync, and system tray UI) to Windows 11.
+- **Windows Host & Ergonomics:** Refine `windows-host/` (C# / .NET 8 / WinForms), test across Windows 10/11 and various display DPI scalings, or add multi-monitor edge routing.
 - **Linux Host & Wayland Support:** Improve `linux-host/` (Rust + X11 + GTK 3), test across distros and desktop environments, or explore native Wayland input/capture support.
 - **Android Device Testing:** Test SEAM across different Android 11-15+ devices and OEM ROMs (Samsung One UI, Pixel, Xiaomi HyperOS, OnePlus OxygenOS, TECNO HiOS) and report any `/dev/uhid`, pointer velocity, scroll, or `IClipboard` quirks.
 - **macOS UI & Ergonomics:** Refine the Liquid Glass menu-bar popover, drag arrangement, or keyboard shortcut mappings.
@@ -24,6 +24,12 @@ Pull requests, bug reports, and device compatibility reports are welcome! SEAM i
 - System libraries: `libx11-dev`, `libxfixes-dev`, `libgtk-3-dev`, `pkg-config`, `dpkg-dev` (for `.deb` packaging)
 - `adb` (`android-tools-adb` / Android Platform Tools) on `PATH`
 - **JDK 17+** (`javac`) and **Android SDK** (`d8`, `android.jar` under `~/Android/Sdk` or `ANDROID_SDK_ROOT`) when modifying `android-agent/`
+
+### Windows Prerequisites
+- **.NET 8 SDK**
+- **Inno Setup 6** (optional, for installer packaging)
+- `adb` (`platform-tools`) on `PATH`
+- **JDK 17+** and **Android SDK** when modifying `android-agent/`
 
 ### Build & Run Locally
 
@@ -55,6 +61,18 @@ seam app
 seam connect --edge right
 ```
 
+**Windows:**
+```bash
+git clone https://github.com/Ferousco-dev/Seam.git
+cd Seam
+
+# Build Release executable
+dotnet build windows-host/Seam.WindowsHost.csproj -c Release
+
+# Run SEAM desktop application
+dotnet run --project windows-host/Seam.WindowsHost.csproj -c Release
+```
+
 ### Verification Commands
 
 Before opening a pull request, build and verify any area your change touches:
@@ -75,6 +93,14 @@ make self-test      # Run on-device /dev/uhid mouse & keyboard self-test
 ./scripts/package-linux.sh 1.1.0  # Verify .tar.gz and .deb packaging
 ```
 
+**Windows & Protocol:**
+```bash
+dotnet run --project windows-host/Seam.WindowsHost.csproj -c Release -- --self-test
+python3 tools/check_java_parity.py
+python3 tools/verify_protocol.py
+bash tools/verify_vectors_openssl.sh
+```
+
 ## Pull Request Process
 
 1. **Fork the repository** and create a focused branch from `main`:
@@ -82,8 +108,8 @@ make self-test      # Run on-device /dev/uhid mouse & keyboard self-test
    git checkout -b feat/your-feature-name
    ```
 2. **Keep changes clean and scoped:**
-   - Avoid committing generated files under `build/`, `dist/`, or `linux-host/target/`.
-   - Match the existing Swift 6 (`macos-host/`), Rust (`linux-host/`), and Java 17 (`android-agent/`) code style.
+   - Avoid committing generated files under `build/`, `dist/`, or `windows-host/bin/`.
+   - Match the existing Swift 6 (`macos-host/`), Rust (`linux-host/`), C# (`windows-host/`), and Java 17 (`android-agent/`) code style.
    - Keep zero-root and non-intrusive phone behavior intact (never suppress Android's on-screen touch keyboard).
 3. **Test on real hardware** whenever changing input, scrolling, clipboard, or transport code, and note your OS version, Android version, and device model in the PR description.
 4. **Open a Pull Request** against `main` describing what changed, why, and how you tested it.
@@ -91,7 +117,7 @@ make self-test      # Run on-device /dev/uhid mouse & keyboard self-test
 ## Reporting Issues
 
 When opening an issue, please include:
-- Host OS version (macOS version / Linux distro & desktop environment)
+- Host OS version (macOS version / Linux distro / Windows 10 or 11 build)
 - Android version and phone model
 - Transport in use (USB, Wi-Fi, or both)
 - Relevant output from `adb shell cat /data/local/tmp/seam-agent.log` if applicable

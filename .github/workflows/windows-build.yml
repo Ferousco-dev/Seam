@@ -15,16 +15,23 @@ name: Windows build
 on:
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: "Release tag to attach Windows packages to (e.g. v1.1.0). Leave blank to skip release upload."
+        required: false
+        type: string
+        default: "v1.1.0"
       retention_days:
         description: "How long the artifacts are kept (days)."
         type: string
         default: "30"
+  release:
+    types: [published]
   pull_request:
     branches:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: windows-build-${{ github.ref }}
@@ -723,6 +730,19 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days || 30 }}
+
+      - name: Upload Windows artifacts to GitHub Release
+        if: ${{ (inputs.release_tag != null && inputs.release_tag != '') || (github.event.release != null && github.event.release.tag_name != null) }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+        shell: pwsh
+        run: |
+          Write-Host "Uploading Windows artifacts to release $env:TAG..."
+          gh release upload "$env:TAG" `
+            build/SEAM-Windows-x64.zip `
+            build/installer/SEAM-Setup-x64.exe `
+            --clobber
 
       # Supplementary: the protocol fixtures are NOT a compilation gate and never replace one.
       - name: Protocol fixture checks (supplementary, not a compile gate)
